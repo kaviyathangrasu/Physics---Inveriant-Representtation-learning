@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Trained model artifacts
+*.pth
+checkpoints/
+
+# Local datasets and generated evaluation output
+train/
+val/
+test/
+results/
+results_baseline/
+results_baseline_attention/

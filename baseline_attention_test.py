@@ -1,0 +1,426 @@
+import os
+import torch
+from torch.utils.data import DataLoader
+from dataset import S2LookingDataset
+from baseline_attention_model import BaselineAttentionChangeDetector
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+DATASET_PATH = r"K:\S2Looking"
+IMAGE_SIZE = 256
+BATCH_SIZE = 2
+
+CHECKPOINT_PATH = "best_baseline_attention.pth"
+RESULTS_DIR = "results_baseline_attention"
+
+THRESHOLD = 0.5
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ============================================================
+# METRIC CALCULATION
+# ============================================================
+def calculate_metrics(tp, fp, fn, tn):
+
+    eps = 1e-8
+
+    total = tp + fp + fn + tn
+
+    accuracy = (tp + tn) / (total + eps)
+
+    precision = tp / (tp + fp + eps)
+
+    recall = tp / (tp + fn + eps)
+
+    f1 = 2 * precision * recall / (
+        precision + recall + eps
+    )
+
+    iou = tp / (tp + fp + fn + eps)
+
+    false_change_rate = fp / (
+        fp + tn + eps
+    )
+
+    return (
+        accuracy,
+        precision,
+        recall,
+        f1,
+        iou,
+        false_change_rate
+    )
+
+
+# ============================================================
+# START
+# ============================================================
+print("======================================")
+print("BASELINE + ATTENTION OFFICIAL TEST")
+print("======================================")
+
+print("Device    :", device)
+print("Checkpoint:", CHECKPOINT_PATH)
+print("Threshold :", THRESHOLD)
+
+
+# ============================================================
+# RESULTS DIRECTORY
+# ============================================================
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+# ============================================================
+# LOAD OFFICIAL TEST DATASET
+# ============================================================
+print("\nLoading official test dataset...")
+
+test_dataset = S2LookingDataset(
+    DATASET_PATH,
+    "test",
+    IMAGE_SIZE
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=0
+)
+
+
+print("\nTEST DATASET")
+print("--------------------------------------")
+print(f"Test samples: {len(test_dataset)}")
+
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
+print("\nLoading Baseline + Attention model...")
+
+model = BaselineAttentionChangeDetector().to(device)
+
+
+checkpoint = torch.load(
+    CHECKPOINT_PATH,
+    map_location=device,
+    weights_only=False
+)
+
+
+# Your training code saves model_state_dict
+if "model_state_dict" in checkpoint:
+
+    model.load_state_dict(
+        checkpoint["model_state_dict"]
+    )
+
+else:
+
+    # Compatibility with a plain state_dict
+    model.load_state_dict(checkpoint)
+
+
+model.eval()
+
+print("Baseline + Attention model loaded successfully!")
+
+
+# ============================================================
+# CONFUSION MATRIX INITIALIZATION
+# ============================================================
+tp = 0
+fp = 0
+fn = 0
+tn = 0
+
+
+# ============================================================
+# TEST INFERENCE
+# ============================================================
+print(
+    "\nRunning Baseline + Attention "
+    "inference on all test samples..."
+)
+
+
+with torch.no_grad():
+
+    for batch_idx, batch in enumerate(test_loader):
+
+        # ----------------------------------------------------
+        # Dataset returns:
+        # image1, image2, label
+        # ----------------------------------------------------
+        image1, image2, label = batch
+
+
+        image1 = image1.to(device)
+
+        image2 = image2.to(device)
+
+        label = label.to(device).float()
+
+
+        # ----------------------------------------------------
+        # MODEL FORWARD PASS
+        # ----------------------------------------------------
+        output = model(
+            image1,
+            image2
+        )
+
+
+        logits = output["change_logits"]
+
+
+        # ----------------------------------------------------
+        # CONVERT LOGITS TO PROBABILITY
+        # ----------------------------------------------------
+        probability = torch.sigmoid(
+            logits
+        )
+
+
+        # ----------------------------------------------------
+        # APPLY THRESHOLD
+        # ----------------------------------------------------
+        prediction = (
+            probability >= THRESHOLD
+        ).long()
+
+
+        # ----------------------------------------------------
+        # GROUND TRUTH
+        # ----------------------------------------------------
+        ground_truth = (
+            label >= 0.5
+        ).long()
+
+
+        # ----------------------------------------------------
+        # FLATTEN PIXELS
+        # ----------------------------------------------------
+        prediction = prediction.view(-1)
+
+        ground_truth = ground_truth.view(-1)
+
+
+        # ----------------------------------------------------
+        # CONFUSION MATRIX
+        # ----------------------------------------------------
+        tp += (
+            (prediction == 1) &
+            (ground_truth == 1)
+        ).sum().item()
+
+
+        fp += (
+            (prediction == 1) &
+            (ground_truth == 0)
+        ).sum().item()
+
+
+        fn += (
+            (prediction == 0) &
+            (ground_truth == 1)
+        ).sum().item()
+
+
+        tn += (
+            (prediction == 0) &
+            (ground_truth == 0)
+        ).sum().item()
+
+
+        # ----------------------------------------------------
+        # PROGRESS
+        # ----------------------------------------------------
+        processed = min(
+            (batch_idx + 1) * BATCH_SIZE,
+            len(test_dataset)
+        )
+
+
+        if (
+            processed % 200 == 0
+            or processed == len(test_dataset)
+        ):
+
+            print(
+                f"Processed "
+                f"{processed}/{len(test_dataset)} samples"
+            )
+
+
+# ============================================================
+# FINAL METRICS
+# ============================================================
+(
+    accuracy,
+    precision,
+    recall,
+    f1,
+    iou,
+    false_change_rate
+) = calculate_metrics(
+    tp,
+    fp,
+    fn,
+    tn
+)
+
+
+# ============================================================
+# PRINT RESULTS
+# ============================================================
+print("\n======================================")
+print(
+    "BASELINE + ATTENTION "
+    "OFFICIAL TEST RESULTS"
+)
+print("======================================")
+
+
+print(
+    f"Accuracy          : "
+    f"{accuracy:.6f}"
+)
+
+print(
+    f"Precision         : "
+    f"{precision:.6f}"
+)
+
+print(
+    f"Recall            : "
+    f"{recall:.6f}"
+)
+
+print(
+    f"F1 Score          : "
+    f"{f1:.6f}"
+)
+
+print(
+    f"IoU               : "
+    f"{iou:.6f}"
+)
+
+print(
+    f"False Change Rate : "
+    f"{false_change_rate:.6f}"
+)
+
+
+# ============================================================
+# CONFUSION MATRIX
+# ============================================================
+print("\nConfusion Matrix:")
+
+print(f"TP : {tp}")
+
+print(f"FP : {fp}")
+
+print(f"FN : {fn}")
+
+print(f"TN : {tn}")
+
+
+# ============================================================
+# SAVE RESULTS
+# ============================================================
+metrics_path = os.path.join(
+    RESULTS_DIR,
+    "baseline_attention_test_metrics.txt"
+)
+
+
+with open(metrics_path, "w") as f:
+
+    f.write(
+        "BASELINE + ATTENTION "
+        "OFFICIAL TEST RESULTS\n"
+    )
+
+    f.write(
+        "==========================================\n"
+    )
+
+    f.write(
+        f"Device            : {device}\n"
+    )
+
+    f.write(
+        f"Checkpoint        : "
+        f"{CHECKPOINT_PATH}\n"
+    )
+
+    f.write(
+        f"Threshold         : "
+        f"{THRESHOLD}\n"
+    )
+
+    f.write(
+        f"Test Samples      : "
+        f"{len(test_dataset)}\n\n"
+    )
+
+    f.write(
+        f"Accuracy          : "
+        f"{accuracy:.6f}\n"
+    )
+
+    f.write(
+        f"Precision         : "
+        f"{precision:.6f}\n"
+    )
+
+    f.write(
+        f"Recall            : "
+        f"{recall:.6f}\n"
+    )
+
+    f.write(
+        f"F1 Score          : "
+        f"{f1:.6f}\n"
+    )
+
+    f.write(
+        f"IoU               : "
+        f"{iou:.6f}\n"
+    )
+
+    f.write(
+        f"False Change Rate : "
+        f"{false_change_rate:.6f}\n\n"
+    )
+
+    f.write("Confusion Matrix:\n")
+
+    f.write(f"TP : {tp}\n")
+
+    f.write(f"FP : {fp}\n")
+
+    f.write(f"FN : {fn}\n")
+
+    f.write(f"TN : {tn}\n")
+
+
+# ============================================================
+# COMPLETED
+# ============================================================
+print(
+    f"\nSaved metrics to: "
+    f"{metrics_path}"
+)
+
+print("======================================")
+print(
+    "BASELINE + ATTENTION "
+    "TEST COMPLETED"
+)
+print("======================================")
